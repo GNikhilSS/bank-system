@@ -31,6 +31,7 @@ const db = new sqlite3.Database('./database.db', (err) => {
             monthly_emi REAL NOT NULL,
             amount_paid REAL DEFAULT 0,
             emis_left INTEGER NOT NULL,
+            status TEXT DEFAULT 'ACTIVE',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )`);
@@ -68,180 +69,135 @@ app.get('/test', (req, res) => {
     res.json({ message: 'Server is working!', timestamp: new Date() });
 });
 
-
+// LEND - Apply for loan
 app.post('/api/loans', (req, res) => {
-    const { customer_name, loan_amount, loan_period_years, interest_rate } = req.body;
-
-    if (!customer_name || !loan_amount || !loan_period_years || !interest_rate) {
+    const { loan_amount, loan_period_years, interest_rate } = req.body;
+    // Always use Alice's ID
+    const aliceId = 1;
+    if (!loan_amount || !loan_period_years || !interest_rate) {
         return res.status(400).json({ error: 'Missing required fields' });
     }
+    const principal = parseFloat(loan_amount);
+    const years = parseInt(loan_period_years, 10);
+    const rate = parseFloat(interest_rate);
+    const interest = principal * years * (rate / 100);
+    const total_amount = principal + interest;
+    const monthly_emi = total_amount / (years * 12);
+    const emis_left = years * 12;
 
-    // Find or create customer
-    db.get('SELECT * FROM customers WHERE name = ?', [customer_name], (err, customer) => {
-        if (err) return res.status(500).json({ error: err.message });
-        const proceedWithCustomer = (cust) => {
-            const principal = parseFloat(loan_amount);
-            const years = parseInt(loan_period_years);
-            const rate = parseFloat(interest_rate);
+    const query = `INSERT INTO loans (customer_id, principal, total_amount, monthly_emi, emis_left)
+                   VALUES (?, ?, ?, ?, ?)`;
 
-            const interest = principal * years * (rate / 100);
-            const total_amount = principal + interest;
-            const monthly_emi = total_amount / (years * 12);
-            const emis_left = years * 12;
-
-            const query = `INSERT INTO loans (customer_id, principal, total_amount, monthly_emi, emis_left)
-                 VALUES (?, ?, ?, ?, ?)`;
-
-            db.run(query, [cust.id, principal, total_amount, monthly_emi, emis_left], function (err) {
-                if (err) {
-                    console.error('Failed to create loan:', err.message);
-                    return res.status(500).json({ error: 'Failed to create loan: ' + err.message });
-                }
-
-                res.status(201).json({
-                    loan_id: this.lastID,
-                    customer_id: cust.id,
-                    customer_name: cust.name,
-                    total_amount,
-                    monthly_emi,
-                    message: 'Loan created successfully!'
-                });
-            });
-        };
-
-        if (customer) {
-            proceedWithCustomer(customer);
-        } else {
-            db.run('INSERT INTO customers (name, customer_code) VALUES (?, ?)', [customer_name, null], function (err2) {
-                if (err2) return res.status(500).json({ error: err2.message });
-                db.get('SELECT * FROM customers WHERE id = ?', [this.lastID], (err3, newCustomer) => {
-                    if (err3) return res.status(500).json({ error: err3.message });
-                    proceedWithCustomer(newCustomer);
-                });
-            });
+    db.run(query, [aliceId, principal, total_amount, monthly_emi, emis_left], function (err) {
+        if (err) {
+            return res.status(500).json({ error: 'Failed to create loan: ' + err.message });
         }
+        res.status(201).json({
+            loan_id: this.lastID,
+            customer_id: aliceId,
+            total_amount,
+            monthly_emi,
+            message: 'Loan created successfully!'
+        });
     });
 });
 
-// LEND - Create a new loan
-// app.post('/api/loans', (req, res) => {
-//     const { customer_id, loan_amount, loan_period_years, interest_rate } = req.body;
-
-//     // Check if all required fields are provided
-//     if (!customer_id || !loan_amount || !loan_period_years || !interest_rate) {
-//         return res.status(400).json({ 
-//             error: 'Missing required fields. Need: customer_id, loan_amount, loan_period_years, interest_rate' 
-//         });
-//     }
-
-//     // Convert strings to numbers
-//     const principal = parseFloat(loan_amount);
-//     const years = parseInt(loan_period_years);
-//     const rate = parseFloat(interest_rate);
-
-//     // Loan calculations using simple interest formula
-//     // I = P * N * R / 100
-//     const interest = principal * years * (rate / 100);
-//     const total_amount = principal + interest;
-//     const monthly_emi = total_amount / (years * 12);
-//     const emis_left = years * 12;
-
-//     console.log('Loan calculation:');
-//     console.log('Principal:', principal);
-//     console.log('Interest:', interest);
-//     console.log('Total Amount:', total_amount);
-//     console.log('Monthly EMI:', monthly_emi);
-
-//     // Save to database
-//     const query = `INSERT INTO loans (customer_id, principal, total_amount, monthly_emi, emis_left) 
-//                    VALUES (?, ?, ?, ?, ?)`;
-
-//     db.run(query, [customer_id, principal, total_amount, monthly_emi, emis_left], function(err) {
-//         if (err) {
-//             console.error('Database error:', err);
-//             return res.status(500).json({ error: 'Failed to create loan: ' + err.message });
-//         }
-
-//         // Success! Return the loan details
-//         res.status(201).json({
-//             loan_id: this.lastID,
-//             customer_id: customer_id,
-//             total_amount: total_amount,
-//             monthly_emi: monthly_emi,
-//             message: 'Loan created successfully!'
-//         });
-//     });
-// });
-
 // PAYMENT - Make a payment for a loan
 app.post('/api/loans/:loan_id/payment', (req, res) => {
-    const loan_id = parseInt(req.params.loan_id);
-    const { amount, payment_type } = req.body;
+  const loan_id = parseInt(req.params.loan_id);
+  const { amount, payment_type } = req.body;
 
-    if (!amount || !payment_type) {
-        return res.status(400).json({ error: 'Both amount and payment_type are required' });
+  if (!amount || !payment_type) {
+    return res.status(400).json({ error: 'Both amount and payment_type are required' });
+  }
+
+  if (payment_type !== 'EMI' && payment_type !== 'LUMP_SUM') {
+    return res.status(400).json({ error: 'payment_type must be either "EMI" or "LUMP_SUM"' });
+  }
+
+  db.get('SELECT * FROM loans WHERE id = ? AND status = "ACTIVE"', [loan_id], (err, loan) => {
+    if (err) {
+      return res.status(500).json({ error: 'Database error: ' + err.message });
+    }
+    if (!loan) {
+      return res.status(404).json({ error: 'Loan not found or is closed' });
     }
 
-    if (payment_type !== 'EMI' && payment_type !== 'LUMP_SUM') {
-        return res.status(400).json({ error: 'payment_type must be either "EMI" or "LUMP_SUM"' });
+    const paymentAmount = parseFloat(amount);
+    if (paymentAmount <= 0) {
+      return res.status(400).json({ error: 'Payment amount must be greater than zero' });
     }
 
-    db.get('SELECT * FROM loans WHERE id = ?', [loan_id], (err, loan) => {
-        if (err) {
-            return res.status(500).json({ error: 'Database error: ' + err.message });
+    const minPayment = loan.monthly_emi;
+    const maxPayment = loan.total_amount - loan.amount_paid;
+
+    // Enforce minimum EMI for EMI payments (except last payment, which can be less)
+    if (payment_type === 'EMI') {
+      if (maxPayment >= minPayment && paymentAmount < minPayment) {
+        return res.status(400).json({ error: `Minimum EMI payment is ₹${minPayment.toFixed(2)}` });
+      }
+      // If final payment (less than EMI left), amount must exactly equal remaining
+      if (maxPayment < minPayment && paymentAmount !== maxPayment) {
+        return res.status(400).json({ error: `Final EMI payment must exactly match remaining balance of ₹${maxPayment.toFixed(2)}` });
+      }
+    }
+
+    // Prevent paying more than remaining balance
+    if (paymentAmount > maxPayment) {
+      return res.status(400).json({ error: `Cannot pay more than remaining balance of ₹${maxPayment.toFixed(2)}` });
+    }
+
+    const newAmountPaid = loan.amount_paid + paymentAmount;
+    let remainingBalance = loan.total_amount - newAmountPaid;
+    if (remainingBalance < 0) remainingBalance = 0;
+
+    let newEmisLeft = loan.emis_left;
+    if (payment_type === 'LUMP_SUM') {
+      newEmisLeft = Math.ceil(remainingBalance / loan.monthly_emi);
+    } else if (payment_type === 'EMI') {
+      newEmisLeft = Math.max(loan.emis_left - 1, 0);
+    }
+
+    const paymentQuery = `INSERT INTO payments (loan_id, amount, payment_type, remaining_balance, emis_left)
+                          VALUES (?, ?, ?, ?, ?)`;
+
+    db.run(paymentQuery, [loan_id, paymentAmount, payment_type, remainingBalance, newEmisLeft], function (paymentErr) {
+      if (paymentErr) {
+        return res.status(500).json({ error: 'Failed to record payment: ' + paymentErr.message });
+      }
+
+      const updateLoanQuery = `UPDATE loans SET amount_paid = ?, emis_left = ? WHERE id = ?`;
+
+      db.run(updateLoanQuery, [newAmountPaid, newEmisLeft, loan_id], function (updateErr) {
+        if (updateErr) {
+          return res.status(500).json({ error: 'Failed to update loan: ' + updateErr.message });
         }
-        if (!loan) {
-            return res.status(404).json({ error: 'Loan not found' });
-        }
 
-        const paymentAmount = parseFloat(amount);
-        if (paymentAmount <= 0) {
-            return res.status(400).json({ error: 'Payment amount must be greater than zero' });
-        }
-
-        const newAmountPaid = loan.amount_paid + paymentAmount;
-        let remainingBalance = loan.total_amount - newAmountPaid;
-
-        if (remainingBalance < 0) {
-            remainingBalance = 0; // Can't pay more than total amount
-        }
-
-        // Calculate new EMIs left depending on payment type
-        let newEmisLeft = loan.emis_left;
-        if (payment_type === 'LUMP_SUM') {
-            newEmisLeft = Math.ceil(remainingBalance / loan.monthly_emi);
-        } else if (payment_type === 'EMI') {
-            newEmisLeft = Math.max(loan.emis_left - 1, 0); // Decrement by one EMI
-        }
-
-        // Insert payment record
-        const paymentQuery = `INSERT INTO payments (loan_id, amount, payment_type, remaining_balance, emis_left) 
-                              VALUES (?, ?, ?, ?, ?)`;
-
-        db.run(paymentQuery, [loan_id, paymentAmount, payment_type, remainingBalance, newEmisLeft], function (paymentErr) {
-            if (paymentErr) {
-                return res.status(500).json({ error: 'Failed to record payment: ' + paymentErr.message });
+        if (newEmisLeft === 0 || remainingBalance <= 0) {
+          db.run('UPDATE loans SET status = ? WHERE id = ?', ['CLOSED', loan_id], (statusErr) => {
+            if (statusErr) {
+              console.error('Failed to close loan:', statusErr.message);
             }
-
-            // Update loan with new amount_paid and emis_left
-            const updateLoanQuery = `UPDATE loans SET amount_paid = ?, emis_left = ? WHERE id = ?`;
-
-            db.run(updateLoanQuery, [newAmountPaid, newEmisLeft, loan_id], function (updateErr) {
-                if (updateErr) {
-                    return res.status(500).json({ error: 'Failed to update loan: ' + updateErr.message });
-                }
-
-                res.json({
-                    payment_id: this.lastID,
-                    loan_id: loan_id,
-                    remaining_balance: remainingBalance,
-                    emis_left: newEmisLeft,
-                    message: 'Payment recorded successfully!'
-                });
+            return res.json({
+              payment_id: this.lastID,
+              loan_id,
+              remaining_balance: remainingBalance,
+              emis_left: newEmisLeft,
+              message: 'Payment recorded successfully! Loan is now CLOSED.'
             });
-        });
-
+          });
+        } else {
+          return res.json({
+            payment_id: this.lastID,
+            loan_id,
+            remaining_balance: remainingBalance,
+            emis_left: newEmisLeft,
+            message: 'Payment recorded successfully!'
+          });
+        }
+      });
     });
+  });
 });
 
 // LEDGER - Get all transactions and loan details by loan_id
@@ -257,7 +213,7 @@ app.get('/api/loans/:loan_id/ledger', (req, res) => {
             return res.status(500).json({ error: 'Database error: ' + err.message });
         }
         if (!loan) {
-            return res.status(404).json({ error: 'Loan not found' });
+            return res.status(404).json({ error: 'Loan closed or not found' });
         }
 
         // Fetch all payments for this loan ordered by most recent first
@@ -281,6 +237,7 @@ app.get('/api/loans/:loan_id/ledger', (req, res) => {
                 amount_paid: loan.amount_paid,
                 balance_amount: balance_amount,
                 emis_left: loan.emis_left,
+                status: loan.status,
                 transactions: payments
             });
         });
@@ -313,7 +270,8 @@ app.get('/api/customers/:customer_id/overview', (req, res) => {
                 total_interest: loan.total_amount - loan.principal,
                 emi_amount: loan.monthly_emi,
                 amount_paid: loan.amount_paid,
-                emis_left: loan.emis_left
+                emis_left: loan.emis_left,
+                status: loan.status
             }))
         };
 
@@ -322,50 +280,51 @@ app.get('/api/customers/:customer_id/overview', (req, res) => {
 });
 
 // CREATE ACCOUNT - Register a new customer
-const generateCustomerCode = (name) => {
-    // Simple example: use first 3 letters uppercase + timestamp 
-    // You can enhance this with better code generation logic
-    const prefix = name.trim().substring(0, 3).toUpperCase();
-    const uniqueSuffix = Date.now().toString().slice(-5); // last 5 digits of timestamp
-    return prefix + uniqueSuffix;
-};
+// const generateCustomerCode = (name) => {
+//     // Simple example: use first 3 letters uppercase + timestamp 
+//     // You can enhance this with better code generation logic
+//     const prefix = name.trim().substring(0, 3).toUpperCase();
+//     const uniqueSuffix = Date.now().toString().slice(-5); // last 5 digits of timestamp
+//     return prefix + uniqueSuffix;
+// };
 
-app.post('/api/customers', (req, res) => {
-    const { name } = req.body;
+// app.post('/api/customers', (req, res) => {
+//     const { name } = req.body;
 
-    if (!name || !name.trim()) {
-        return res.status(400).json({ error: 'Name is required' });
-    }
+//     if (!name || !name.trim()) {
+//         return res.status(400).json({ error: 'Name is required' });
+//     }
 
-    // Check if customer with same name exists (optional: or enforce unique names)
-    db.get('SELECT id, customer_code FROM customers WHERE name = ?', [name.trim()], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (row) {
-            return res.status(409).json({
-                error: 'Customer with this name already exists',
-                customer: { id: row.id, customer_code: row.customer_code, name }
-            });
-        }
+//     // Check if customer with same name exists (optional: or enforce unique names)
+//     db.get('SELECT id, customer_code FROM customers WHERE name = ?', [name.trim()], (err, row) => {
+//         if (err) return res.status(500).json({ error: err.message });
+//         if (row) {
+//             return res.status(409).json({
+//                 error: 'Customer with this name already exists',
+//                 customer: { id: row.id, customer_code: row.customer_code, name }
+//             });
+//         }
 
-        const customer_code = generateCustomerCode(name);
+//         const customer_code = generateCustomerCode(name);
 
-        db.run(
-            'INSERT INTO customers (customer_code, name) VALUES (?, ?)',
-            [customer_code, name.trim()],
-            function (err2) {
-                if (err2) return res.status(500).json({ error: err2.message });
+//         db.run(
+//             'INSERT INTO customers (customer_code, name) VALUES (?, ?)',
+//             [customer_code, name.trim()],
+//             function (err2) {
+//                 if (err2) return res.status(500).json({ error: err2.message });
 
-                res.status(201).json({
-                    message: 'Account created successfully',
-                    customer: { id: this.lastID, customer_code, name: name.trim() },
-                });
-            }
-        );
-    });
-});
+//                 res.status(201).json({
+//                     message: 'Account created successfully',
+//                     customer: { id: this.lastID, customer_code, name: name.trim() },
+//                 });
+//             }
+//         );
+//     });
+// });
 
 
 // Get all customers
+
 app.get('/api/customers', (req, res) => {
     db.all('SELECT name FROM customers', (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -376,27 +335,21 @@ app.get('/api/customers', (req, res) => {
 
 
 // Get customer by numeric ID
-app.get('/api/customers/id/:id', (req, res) => {
-    const id = parseInt(req.params.id);
+// app.get('/api/customers/id/:id', (req, res) => {
+//     const id = parseInt(req.params.id);
 
-    if (isNaN(id)) {
-        return res.status(400).json({ error: 'Invalid customer ID' });
-    }
+//     if (isNaN(id)) {
+//         return res.status(400).json({ error: 'Invalid customer ID' });
+//     }
 
-    db.get('SELECT id, customer_code, name FROM customers WHERE id = ?', [id], (err, row) => {
-        if (err) return res.status(500).json({ error: err.message });
-        if (!row) return res.status(404).json({ error: 'Customer not found' });
-        res.json(row);
-    });
-});
-
-
+//     db.get('SELECT id, customer_code, name FROM customers WHERE id = ?', [id], (err, row) => {
+//         if (err) return res.status(500).json({ error: err.message });
+//         if (!row) return res.status(404).json({ error: 'Customer not found' });
+//         res.json(row);
+//     });
+// });
 
 
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
-    console.log('✅ Step 2 Complete! LEND endpoint is ready.');
-    console.log('📋 Available endpoints:');
-    console.log('   GET  /test');
-    console.log('   POST /api/loans');
 });
